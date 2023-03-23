@@ -1,10 +1,14 @@
 import logging
 import os
+import sys
 import time
+from http import HTTPStatus
 
 import requests
 import telegram
 from dotenv import load_dotenv
+
+from endpoints import API_YANDEX_ENDPOINT
 
 load_dotenv()
 
@@ -21,8 +25,9 @@ TELEGRAM_CHAT_ID = os.getenv('chat_id')
 
 
 RETRY_PERIOD = 600
-ENDPOINT = 'https://practicum.yandex.ru/api/user_api/homework_statuses/'
+ENDPOINT = API_YANDEX_ENDPOINT
 HEADERS = {'Authorization': f'OAuth {PRACTICUM_TOKEN}'}
+
 
 HOMEWORK_VERDICTS = {
     'approved': 'Работа проверена: ревьюеру всё понравилось. Ура!',
@@ -40,6 +45,7 @@ def check_tokens():
 
 def send_message(bot, message):
     """Отправляет сообщение в телеграм."""
+    logging.info('Начали отправку сообщения в tg')
     try:
         bot.send_message(TELEGRAM_CHAT_ID, message)
         logging.debug('Сообщение успешно отправлено')
@@ -54,8 +60,7 @@ def get_api_answer(timestamp):
             ENDPOINT, headers=HEADERS, params={
                 'from_date': timestamp})
         response = homework_status.json()
-        print(homework_status, response)
-        if homework_status.status_code != 200:
+        if homework_status.status_code != HTTPStatus.OK:
             raise ConnectionRefusedError('API недоступна')
         return response
     except Exception as error:
@@ -65,6 +70,7 @@ def get_api_answer(timestamp):
 
 def check_response(response):
     """Функция проверяет, что ответ соответствует ожидаемому."""
+    logging.info('Начали проверять ответ API')
     if not isinstance(response, dict):
         logging.error('Неожиданный статус домашней работы')
         raise TypeError('Wrong format of the response')
@@ -72,6 +78,9 @@ def check_response(response):
         logging.error('Неожиданный статус домашней работы')
         raise KeyError('Wrong format of the response')
     if not isinstance(response['homeworks'], list):
+        logging.error('Неожиданный статус домашней работы')
+        raise TypeError('Wrong format of the response')
+    if 'homeworks' not in response or 'current_date' not in response:
         logging.error('Неожиданный статус домашней работы')
         raise TypeError('Wrong format of the response')
     return response['homeworks'][0]
@@ -89,8 +98,8 @@ def parse_status(homework):
     if homework_status not in HOMEWORK_VERDICTS:
         logging.debug('Неверный формат')
         raise TypeError('Ответ не соответсвует ожидаемому')
-    return f'Изменился статус проверки' \
-           f' работы "{homework_name}". {HOMEWORK_VERDICTS[homework_status]}'
+    return (f'Изменился статус проверки'
+            f' работы "{homework_name}". {HOMEWORK_VERDICTS[homework_status]}')
 
 
 def main():
@@ -98,12 +107,12 @@ def main():
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
     timestamp = int(time.time())
 
+    if not check_tokens():
+        sys.exit()
+
     while True:
-        if not check_tokens():
-            break
         try:
             homeworks = get_api_answer(timestamp)
-            print(homeworks)
             one_homework = check_response(homeworks)
             if len(one_homework) != 0:
                 message = parse_status(one_homework)
